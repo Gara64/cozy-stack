@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/permission"
@@ -40,6 +41,7 @@ func rawMessageToObject(i *instance.Instance, bb json.RawMessage) (jsonapi.Objec
 // GET /data/:type/:id/relationships/references
 // Beware, this is actually used in the web/data Routes
 func ListReferencesHandler(c echo.Context) error {
+	startTime := time.Now()
 	instance := middlewares.GetInstance(c)
 	doctype := c.Get("doctype").(string)
 	id := c.Param("docid")
@@ -96,12 +98,15 @@ func ListReferencesHandler(c echo.Context) error {
 		Descending:  descending,
 	}
 	cursor.ApplyTo(req)
-
+	startTimeView := time.Now()
 	var res couchdb.ViewResponse
 	err = couchdb.ExecView(instance, view, req, &res)
 	if err != nil {
 		return err
 	}
+	elapsed := time.Since(startTimeView)
+	fmt.Printf("view query : %+v\n", req)
+	fmt.Printf("elapsed view %s\n", elapsed)
 
 	cursor.UpdateFrom(&res)
 
@@ -134,7 +139,8 @@ func ListReferencesHandler(c echo.Context) error {
 			}
 		}
 	}
-
+	elapsed = time.Since(startTime)
+	fmt.Printf("elapsed list %s\n", elapsed)
 	return jsonapi.DataRelations(c, http.StatusOK, refs, count, links, docs)
 }
 
@@ -182,7 +188,10 @@ func AddReferencesHandler(c echo.Context) error {
 		}
 	}
 	// Use bulk update for better performances
+	startTime := time.Now()
 	err = couchdb.BulkUpdateDocs(instance, consts.Files, docs, oldDocs)
+	elapsed := time.Since(startTime)
+	fmt.Printf("elapsed bulk update %v refs : %s\n", len(references), elapsed)
 	if err != nil {
 		return WrapVfsError(err)
 	}

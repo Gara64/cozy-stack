@@ -4,10 +4,12 @@ package jsonapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/echo"
@@ -103,11 +105,11 @@ func DataListWithTotal(c echo.Context, statusCode, total int, objs []Object, lin
 // DataRelations can be called to send a Relations page,
 // a list of ResourceIdentifier
 func DataRelations(c echo.Context, statusCode int, refs []couchdb.DocReference, total int, links *LinksList, included []Object) error {
+	startTime := time.Now()
 	data, err := json.Marshal(refs)
 	if err != nil {
 		return InternalServerError(err)
 	}
-
 	doc := Document{
 		Data: (*json.RawMessage)(&data),
 		Meta: &RelationshipMeta{
@@ -115,7 +117,7 @@ func DataRelations(c echo.Context, statusCode int, refs []couchdb.DocReference, 
 		},
 		Links: links,
 	}
-
+	startTimeMarshal := time.Now()
 	if included != nil {
 		includedMarshaled := make([]interface{}, len(included))
 		for i, o := range included {
@@ -125,13 +127,18 @@ func DataRelations(c echo.Context, statusCode int, refs []couchdb.DocReference, 
 			}
 			includedMarshaled[i] = &j
 		}
+		elapsed := time.Since(startTimeMarshal)
+		fmt.Printf("elapsed marshal included %s\n", elapsed)
 		doc.Included = includedMarshaled
 	}
 
 	resp := c.Response()
 	resp.Header().Set("Content-Type", ContentType)
 	resp.WriteHeader(statusCode)
-	return json.NewEncoder(resp).Encode(doc)
+	json := json.NewEncoder(resp).Encode(doc)
+	elapsed := time.Since(startTime)
+	fmt.Printf("elapsed data realtion %s\n", elapsed)
+	return json
 }
 
 // DataError can be called to send an error answer with a JSON-API document
@@ -273,6 +280,7 @@ func ExtractPaginationCursor(c echo.Context, defaultLimit, maxLimit int) (couchd
 		if err != nil {
 			return nil, Errorf(http.StatusBadRequest, "bad json cursor %s", cursor)
 		}
+		fmt.Printf("parts : %v\n", parts)
 
 		if len(parts) != 2 {
 			return nil, Errorf(http.StatusBadRequest, "bad cursor length %s", cursor)

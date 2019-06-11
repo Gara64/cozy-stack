@@ -1,5 +1,7 @@
 package couchdb
 
+import "fmt"
+
 // A Cursor holds a reference to a page in a couchdb View
 type Cursor interface {
 	HasMore() bool
@@ -10,6 +12,7 @@ type Cursor interface {
 // NewKeyCursor returns a new key based Cursor pointing to
 // the given start_key & startkey_docid
 func NewKeyCursor(limit int, key interface{}, id string) Cursor {
+	fmt.Printf("key cursor\n")
 	return &StartKeyCursor{
 		baseCursor: &baseCursor{Limit: limit},
 		NextKey:    key,
