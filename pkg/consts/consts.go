@@ -32,6 +32,8 @@ const (
 	// NoLongerSharedDirID is the identifier of the directory where the files &
 	// folders removed from a sharing but still used via a reference are put
 	NoLongerSharedDirID = "io.cozy.files.no-longer-shared-dir"
+	// VaultDirID is the encrypted directory identifier
+	VaultDirID = "io.cozy.files.vault-dir"
 )
 
 const (

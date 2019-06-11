@@ -36,6 +36,8 @@ const (
 	// OrphansDirName is the path of the directory used to store data-files added
 	// in the index from a filesystem-check (fsck)
 	OrphansDirName = "/.cozy_orphans"
+	// VaultDirName is the path of the encrypted directory
+	VaultDirName = "/Vault"
 )
 
 const (

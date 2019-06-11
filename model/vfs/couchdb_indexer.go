@@ -54,6 +54,19 @@ func (c *couchdbIndexer) InitIndex() error {
 	if err != nil && !couchdb.IsConflictError(err) {
 		return err
 	}
+
+	err = couchdb.CreateNamedDocWithDB(c.db, &DirDoc{
+		DocName:   path.Base(VaultDirName),
+		Type:      consts.DirType,
+		DocID:     consts.VaultDirID,
+		Fullpath:  VaultDirName,
+		DirID:     consts.RootDirID,
+		CreatedAt: createDate,
+		UpdatedAt: createDate,
+	})
+	if err != nil && !couchdb.IsConflictError(err) {
+		return err
+	}
 	return nil
 }
 
