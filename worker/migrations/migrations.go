@@ -61,7 +61,15 @@ func init() {
 }
 
 type message struct {
-	Type string `json:"type"`
+	Type  string `json:"type"`
+	DocID string `json:"_id,omitempty"`
+}
+
+// VaultReference is the cipher relationship for an account
+type VaultReference struct {
+	ID       string `json:"_id"`
+	Type     string `json:"_type"`
+	Protocol string `json:"_protocol"`
 }
 
 func worker(ctx *job.WorkerContext) error {
@@ -79,7 +87,7 @@ func worker(ctx *job.WorkerContext) error {
 	case swiftV1ToV2:
 		return fmt.Errorf("this migration type is no longer supported")
 	case accountsToOrganization:
-		return migrateAccountsToOrganization(ctx.Instance.Domain)
+		return migrateAccountsToOrganization(ctx.Instance.Domain, msg.DocID)
 	case notesMimeType:
 		return migrateNotesMimeType(ctx.Instance.Domain)
 	default:
@@ -131,15 +139,52 @@ func migrateNotesMimeType(domain string) error {
 	return nil
 }
 
-// Migrate all the encrypted accounts to Bitwarden ciphers.
-// It decrypts each account, reencrypt the fields with the organization key,
-// and save it in the ciphers database.
-func migrateAccountsToOrganization(domain string) error {
+// migrateSingleAccount migrates a single account into a shared cipher.
+// It decrypts the account credentials, creates a cipher encrypted with the
+// organization key and adds a relationship in the account.
+func migrateSingleAccount(inst *instance.Instance, orgKey []byte, acc *account.Account, slug, url string) error {
+	encryptedCreds := acc.Basic.EncryptedCredentials
+	login, password, err := account.DecryptCredentials(encryptedCreds)
+	if err != nil {
+		return err
+	}
+	cipher, err := buildCipher(orgKey, slug, login, password, url)
+	if err != nil {
+		return err
+	}
+	if err := couchdb.CreateDoc(inst, cipher); err != nil {
+		return err
+	}
+	// Add vault relationship
+	vRef := VaultReference{
+		ID:       cipher.ID(),
+		Type:     consts.BitwardenCiphers,
+		Protocol: consts.BitwardenProtocol,
+	}
+	if acc.Relationships == nil {
+		acc.Relationships = make(map[string]interface{})
+	}
+	rel := make(map[string][]VaultReference)
+	rel["data"] = []VaultReference{vRef}
+	acc.Relationships[consts.BitwardenCipherRelationship] = rel
+
+	return couchdb.UpdateDoc(inst, acc)
+}
+
+// Migrate accounts to Bitwarden's organization ciphers.
+// If accountID is not empty, it migrates this single account
+// If accountID is empty, it migrates all accounts
+func migrateAccountsToOrganization(domain, accountID string) error {
 	inst, err := instance.GetFromCouch(domain)
 	if err != nil {
 		return err
 	}
 	log := inst.Logger().WithField("nspace", "migration")
+
+	singleAccount := false
+	if accountID != "" {
+		singleAccount = true
+	}
 
 	setting, err := settings.Get(inst)
 	if err != nil {
@@ -161,13 +206,8 @@ func migrateAccountsToOrganization(domain string) error {
 		return err
 	}
 	var msg struct {
-		Account string `json:"account"`
+		Account string `json:"account"` // The account id
 		Slug    string `json:"konnector"`
-	}
-	type VaultReference struct {
-		ID       string `json:"_id"`
-		Type     string `json:"_type"`
-		Protocol string `json:"_protocol"`
 	}
 	var errm error
 	for _, t := range triggers {
@@ -176,6 +216,10 @@ func migrateAccountsToOrganization(domain string) error {
 		}
 		err := t.Infos().Message.Unmarshal(&msg)
 		if err != nil || msg.Account == "" || msg.Slug == "" {
+			continue
+		}
+		if singleAccount && msg.Account != accountID {
+			// This is not the account we are looking for
 			continue
 		}
 		manifest, err := app.GetKonnectorBySlug(inst, msg.Slug)
@@ -192,44 +236,22 @@ func migrateAccountsToOrganization(domain string) error {
 			errm = multierror.Append(errm, err)
 		}
 		link = strings.Trim(link, "'")
+
 		acc := &account.Account{}
 		if err := couchdb.GetDoc(inst, consts.Accounts, msg.Account, acc); err != nil {
 			errm = multierror.Append(errm, err)
 			continue
 		}
-		encryptedCreds := acc.Basic.EncryptedCredentials
-		login, password, err := account.DecryptCredentials(encryptedCreds)
-		if err != nil {
+		if err := migrateSingleAccount(inst, orgKey, acc, msg.Slug, link); err != nil {
 			if err == account.ErrBadCredentials {
 				log.Warningf("Bad credentials for account %s - %s", acc.ID(), acc.AccountType)
 			} else {
 				errm = multierror.Append(errm, err)
 			}
-			continue
 		}
-		cipher, err := buildCipher(orgKey, msg.Slug, login, password, link)
-		if err != nil {
-			errm = multierror.Append(errm, err)
-			continue
-		}
-		if err := couchdb.CreateDoc(inst, cipher); err != nil {
-			errm = multierror.Append(errm, err)
-		}
-		// Add vault relationship
-		vRef := VaultReference{
-			ID:       cipher.ID(),
-			Type:     consts.BitwardenCiphers,
-			Protocol: consts.BitwardenProtocol,
-		}
-		if acc.Relationships == nil {
-			acc.Relationships = make(map[string]interface{})
-		}
-		rel := make(map[string][]VaultReference)
-		rel["data"] = []VaultReference{vRef}
-		acc.Relationships[consts.BitwardenCipherRelationship] = rel
-
-		if err := couchdb.UpdateDoc(inst, acc); err != nil {
-			errm = multierror.Append(errm, err)
+		if singleAccount {
+			// We only wanted to migrate this single account
+			break
 		}
 	}
 	settings.UpdateRevisionDate(inst, setting)
